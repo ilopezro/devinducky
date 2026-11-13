@@ -11,10 +11,11 @@ LED index = key ID - 1.
 from dataclasses import dataclass
 
 NUM_SLOTS = 12
-NUM_LAUNCH = 4
+NUM_LAUNCH = 3
 
 SLOT_KEYS = list(range(1, 13))          # rows 0-2
-LAUNCH_KEYS = list(range(13, 17))       # row 3
+LAUNCH_KEYS = list(range(13, 16))       # row 3
+KEY_RESET = 16
 KEY_OPEN, KEY_DASH, KEY_REFRESH, KEY_INFO = 17, 18, 19, 20
 ENC1_CW, ENC1_CCW, ENC1_PUSH = 21, 22, 23
 ENC2_CW, ENC2_CCW, ENC2_PUSH = 24, 25, 26
@@ -56,7 +57,7 @@ def _events():
     evs = []
     for k in SLOT_KEYS:                 # slots need down AND up to time a hold
         evs += [Event("down", k), Event("up", k)]
-    for k in LAUNCH_KEYS + [KEY_OPEN, KEY_DASH, KEY_REFRESH]:
+    for k in LAUNCH_KEYS + [KEY_RESET, KEY_OPEN, KEY_DASH, KEY_REFRESH]:
         evs.append(Event("press", k))
     for k in (ENC1_CW, ENC1_CCW, ENC1_PUSH, ENC2_PUSH):
         evs.append(Event("press", k))

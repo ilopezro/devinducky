@@ -62,6 +62,20 @@ def test_bind_move_unbind_roundtrip(tmp_path):
     assert b2.unbind(3) == "s3" and b2.first_free() == 0
 
 
+def test_clear_keeps_a_backup(tmp_path):
+    path = tmp_path / "b.json"
+    b = Bindings(str(path), 12)
+    b.bind(0, "s1")
+    b.bind(4, "s2")
+    b.save()
+    assert b.clear() == 2 and b.slots == {}
+    b.save()
+    assert Bindings(str(path), 12).load().slots == {}
+    assert Bindings(str(path) + ".bak", 12).load().slots == {0: "s1", 4: "s2"}
+    assert b.clear() == 0                         # nothing bound: the backup is left alone
+    assert Bindings(str(path) + ".bak", 12).load().slots == {0: "s1", 4: "s2"}
+
+
 def test_bindings_ignore_bad_file(tmp_path):
     p = tmp_path / "b.json"
     p.write_text('{"0": "a", "40": "out-of-range", "1": ""}')
@@ -158,6 +172,33 @@ def test_build_profile(tmp_path):
     assert "z1 S1" in conf and "dr 1" in conf and "z13 Fix C" in conf and "dr 20" in conf
     assert all(f"z{k} " in "\n".join(conf) for k in range(1, 27))
     assert open(f"{pdir}/key1.txt").read() == keys.HOTKEY_FOR[keys.Event("down", 1)].ducky() + "\n"
+
+
+def test_reset_needs_a_second_tap(tmp_path):
+    import threading
+    from devinducky import daemon
+    from devinducky.render import Frame
+    d = daemon.Daemon.__new__(daemon.Daemon)
+    d.cfg, d.lock, d.armed, d.frame = DEFAULTS, threading.RLock(), {}, Frame()
+    d.bindings = Bindings(str(tmp_path / "b.json"), keys.NUM_SLOTS)
+    d.bindings.bind(0, "aaa")
+    d.bindings.bind(3, "ddd")
+    d.bindings.save()
+    d.cursor, d.goto_due = 3, 1.0
+    d.handle("press", keys.KEY_RESET)
+    assert d.bindings.ids() == ["aaa", "ddd"]       # armed only
+    d.armed[keys.KEY_RESET] = 0                     # arming timed out
+    d.handle("press", keys.KEY_RESET)
+    assert d.bindings.ids() == ["aaa", "ddd"]       # so this tap arms again
+    d.handle("press", keys.KEY_RESET)
+    assert d.bindings.ids() == [] and d.cursor is None and d.goto_due is None
+    assert Bindings(str(tmp_path / "b.json"), keys.NUM_SLOTS).load().slots == {}
+    d.handle("press", keys.KEY_RESET)
+    assert d.armed == {}                            # nothing bound: doesn't arm
+
+
+def test_reset_keeps_the_hotkey_l4_had():
+    assert str(keys.HOTKEY_FOR[keys.Event("press", keys.KEY_RESET)]) == "ctrl+alt+shift+f16"
 
 
 def test_parse_tab_list():

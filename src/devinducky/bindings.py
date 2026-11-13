@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import tempfile
 
 
@@ -37,6 +38,14 @@ class Bindings:
 
     def unbind(self, slot):
         return self.slots.pop(slot, None)
+
+    def clear(self):
+        """Unbind every slot, keeping the saved file as <path>.bak. Returns how many were bound."""
+        n = len(self.slots)
+        if n and os.path.exists(self.path):
+            shutil.copyfile(self.path, self.path + ".bak")
+        self.slots = {}
+        return n
 
     def slot_of(self, session_id):
         return next((s for s, sid in self.slots.items() if sid == session_id), None)

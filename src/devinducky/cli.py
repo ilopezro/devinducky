@@ -113,7 +113,7 @@ def cmd_playbooks(args):
 def profile_scripts(cfg):
     """{(key_id, "press"|"release"): duckyScript} for the devinducky pad profile."""
     out = {}
-    names = {keys.KEY_OPEN: "NEW", keys.KEY_DASH: "DASH", keys.KEY_REFRESH: "REFR"}
+    names = {keys.KEY_RESET: "RESET", keys.KEY_OPEN: "NEW", keys.KEY_DASH: "DASH", keys.KEY_REFRESH: "REFR"}
     for ev, hk in keys.HOTKEY_FOR.items():
         part = "release" if ev.kind == "up" else "press"
         out[(ev.key, part)] = hk.ducky()

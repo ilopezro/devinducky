@@ -16,8 +16,8 @@ macOS only, because it uses AppleScript to read and focus browser tabs.
  ├──────┼──────┼──────┼──────┤    tap           = go to that session
  │ S9   │ S10  │ S11  │ S12  │    LED           = session state
  ├──────┼──────┼──────┼──────┤
- │ L1   │ L2   │ L3   │ L4   │  launch presets: tap to arm (blinks), tap again within 3 s to launch
- ├──────┼──────┼──────┼──────┤
+ │ L1   │ L2   │ L3   │ RESET│  launch presets: tap to arm (blinks), tap again within 3 s to launch
+ ├──────┼──────┼──────┼──────┤    RESET         = unbind every slot (same arm, then confirm)
  │ NEW  │ DASH │ REFR │ INFO │  new-session page · sessions list · refresh now · OLED summary
  └──────┴──────┴──────┴──────┘
  upper encoder: rotate = step through bound sessions (the browser follows when you stop), push = open
@@ -52,6 +52,8 @@ INFO shows a summary on the OLED for 5 seconds, or until you press another key. 
 | off | unbound |
 
 Bindings live in `~/.devinducky/bindings.json` and survive restarts. A session that ends stays bound, showing very dim, until you rebind or unbind its key.
+
+RESET unbinds all 12 slots at once. It doesn't touch the sessions themselves. The bindings it cleared are kept in `~/.devinducky/bindings.json.bak`; copy that file back over `bindings.json` and run `devinducky restart` to undo a reset.
 
 ## How it works
 
@@ -106,7 +108,7 @@ ntfy_url = ""                       # optionally also POST notifications here
 [colors]
 working = [0, 60, 255]
 
-[[launch]]                          # L1..L4, in order
+[[launch]]                          # L1..L3, in order
 name   = "Fix CI"                   # first 5 chars become the key label
 prompt = "Look at the latest failing CI run on main in org/repo and open a PR fixing it."
 repos  = ["org/repo"]

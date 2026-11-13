@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 profile/
 .DS_Store
+tools/

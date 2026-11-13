@@ -46,7 +46,7 @@ class Daemon:
         self.cursor_moved = 0.0
         self.goto_due = None          # monotonic time to switch the browser to the cursor session
         self.nav_lock = threading.Lock()   # one tab switch at a time, in order
-        self.armed = {}               # launch index -> monotonic deadline
+        self.armed = {}               # key ID -> monotonic deadline
         self.api_health = API_OK
         self.failures = 0
         self.fast_until = 0.0
@@ -171,6 +171,8 @@ class Daemon:
         launch = keys.launch_of(key)
         if launch is not None:
             self.tap_launch(launch)
+        elif key == keys.KEY_RESET:
+            self.tap_reset()
         elif key == keys.KEY_OPEN:
             self.frame.set_effect(keys.led_of_key(keys.KEY_OPEN), "fade", WHITE, 0.6)
             open_url(self.cfg["new_session_url"])
@@ -298,21 +300,43 @@ class Daemon:
         self.cursor_moved = time.monotonic()
         self.goto_due = self.cursor_moved + GOTO_SETTLE_S
 
+    def confirmed(self, key):
+        """True on the second tap within arm_s; the first tap arms the key and blinks it."""
+        now = time.monotonic()
+        if self.armed.get(key, 0) > now:
+            del self.armed[key]
+            return True
+        self.armed[key] = now + self.cfg["arm_s"]
+        self.frame.set_effect(keys.led_of_key(key), "blink", WHITE, self.cfg["arm_s"], period=0.2)
+        return False
+
     def tap_launch(self, idx):
-        led = keys.led_of_key(keys.LAUNCH_KEYS[idx])
+        key = keys.LAUNCH_KEYS[idx]
+        led = keys.led_of_key(key)
         presets = self.cfg["launch"]
         if idx >= len(presets):
             self.frame.set_effect(led, "fade", DIM, 0.3)
             return
-        now = time.monotonic()
-        if self.armed.get(idx, 0) > now:
-            del self.armed[idx]
+        if self.confirmed(key):
             self.frame.set_effect(led, "solid", WHITE, 30)
             threading.Thread(target=self.launch, args=(idx,), daemon=True).start()
         else:
-            self.armed[idx] = now + self.cfg["arm_s"]
-            self.frame.set_effect(led, "blink", WHITE, self.cfg["arm_s"], period=0.2)
             log.info("L%d armed: %s (tap again to launch)", idx + 1, presets[idx].get("name"))
+
+    def tap_reset(self):
+        led = keys.led_of_key(keys.KEY_RESET)
+        if not self.bindings.ids():
+            self.frame.set_effect(led, "fade", DIM, 0.3)
+            return
+        if not self.confirmed(keys.KEY_RESET):
+            log.info("reset armed (tap again to unbind every slot)")
+            return
+        with self.lock:
+            n = self.bindings.clear()
+            self.bindings.save()
+            self.cursor = self.goto_due = None
+        log.info("reset: unbound %d slot(s); previous bindings in %s.bak", n, self.bindings.path)
+        self.frame.set_effect(led, "flash", GREEN, 1.0)
 
     def launch(self, idx):
         preset = self.cfg["launch"][idx]
@@ -362,6 +386,7 @@ class Daemon:
             for i, k in enumerate(keys.LAUNCH_KEYS):
                 preset = self.cfg["launch"][i] if i < len(self.cfg["launch"]) else None
                 f.base[keys.led_of_key(k)] = tuple(preset.get("color", cfg_c["launch"])) if preset else (0, 0, 0)
+            f.base[keys.led_of_key(keys.KEY_RESET)] = tuple(cfg_c["reset"])
             for k in (keys.KEY_OPEN, keys.KEY_DASH, keys.KEY_REFRESH, keys.KEY_INFO):
                 f.base[keys.led_of_key(k)] = tuple(cfg_c["nav"])
             info = keys.led_of_key(keys.KEY_INFO)
@@ -394,6 +419,9 @@ class Daemon:
 
     def run(self):
         logging.getLogger("devinducky").info("starting; %d slot(s) bound", len(self.bindings.ids()))
+        if len(self.cfg["launch"]) > keys.NUM_LAUNCH:
+            log.warning("config has %d launch presets; only the first %d have a key",
+                        len(self.cfg["launch"]), keys.NUM_LAUNCH)
         self.input.start()
         threading.Thread(target=self.poll_loop, daemon=True).start()
         threading.Thread(target=self.render_loop, daemon=True).start()
