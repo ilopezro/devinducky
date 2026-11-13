@@ -5,6 +5,8 @@ for each key from it, and the input listener decodes hotkeys with it.
 
 duckyPad Pro key IDs: 1-20 are keys (top-left = 1, row-major, 4 per row),
 21-23 upper encoder CW/CCW/push, 24-26 lower encoder CW/CCW/push.
+The upper encoder sends nothing to the daemon: its push holds modifiers for
+another app's push-to-talk (see `wheel_hold` in config.py).
 LED index = key ID - 1.
 """
 
@@ -59,8 +61,7 @@ def _events():
         evs += [Event("down", k), Event("up", k)]
     for k in LAUNCH_KEYS + [KEY_RESET, KEY_OPEN, KEY_DASH, KEY_REFRESH]:
         evs.append(Event("press", k))
-    for k in (ENC1_CW, ENC1_CCW, ENC1_PUSH, ENC2_PUSH):
-        evs.append(Event("press", k))
+    evs.append(Event("press", ENC2_PUSH))
     return evs
 
 

@@ -58,7 +58,6 @@ class Frame:
         self.base = [OFF] * hid.NUM_LEDS
         self.pulses = {}         # led -> period_s
         self.effects = {}        # led -> Effect
-        self.cursor = None       # led index breathing toward white
         self._lock = threading.Lock()
 
     def set_effect(self, led, kind, color, duration, period=0.25):
@@ -71,7 +70,7 @@ class Frame:
             self.effects.pop(led, None)
 
     def animating(self, t):
-        return bool(self.pulses) or self.cursor is not None or any(e.until > t for e in list(self.effects.values()))
+        return bool(self.pulses) or any(e.until > t for e in list(self.effects.values()))
 
     def evaluate(self, t):
         with self._lock:
@@ -80,8 +79,6 @@ class Frame:
         out = []
         for i, base in enumerate(self.base):
             c = pulse(base, self.pulses[i], t) if i in self.pulses else base
-            if i == self.cursor:
-                c = mix(c, WHITE, 0.25 + 0.25 * math.sin(2 * math.pi * t / 1.5))
             if i in effects:
                 c = effects[i].apply(c, t)
             out.append(tuple(c))

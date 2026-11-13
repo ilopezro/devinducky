@@ -118,6 +118,10 @@ def profile_scripts(cfg):
         part = "release" if ev.kind == "up" else "press"
         out[(ev.key, part)] = hk.ducky()
     out[(keys.KEY_INFO, "press")] = INFO_SCRIPT
+    mods = [keys.DUCKY_MOD[m] for m in cfg["wheel_hold"]]
+    if mods:                                       # push-to-talk: held for as long as the wheel is
+        out[(keys.ENC1_PUSH, "press")] = "\n".join(f"KEYDOWN {m}" for m in mods)
+        out[(keys.ENC1_PUSH, "release")] = "\n".join(f"KEYUP {m}" for m in reversed(mods))
     out[(keys.ENC2_CW, "press")] = "MK_VOLUP"      # lower wheel is a plain volume knob,
     out[(keys.ENC2_CCW, "press")] = "MK_VOLDOWN"   # handled on the pad without the daemon
     labels = {k: f"S{k}" for k in keys.SLOT_KEYS}
@@ -169,7 +173,7 @@ OLED_RESTORE
 
 
 PROFILE_NAME = "devinducky"
-ENCODER_LABELS = {keys.ENC1_CW: "SEL+", keys.ENC1_CCW: "SEL-", keys.ENC1_PUSH: "OPEN",
+ENCODER_LABELS = {keys.ENC1_PUSH: "TALK",
                   keys.ENC2_CW: "VOL+", keys.ENC2_CCW: "VOL-", keys.ENC2_PUSH: "REFR"}
 
 

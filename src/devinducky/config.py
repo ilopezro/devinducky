@@ -15,6 +15,7 @@ DEFAULTS = {
     "fast_poll_window_s": 60,
     "hold_ms": 700,
     "arm_s": 3,
+    "wheel_hold": ["ctrl", "cmd", "alt"],   # modifiers held while the upper wheel is pushed in; [] = none
     "resync_s": 10,
     "browsers": ["Google Chrome", "Arc", "Safari", "Brave Browser", "Microsoft Edge"],
     "desktop_app": True,       # also find and show sessions in the Devin desktop app

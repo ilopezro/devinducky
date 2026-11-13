@@ -69,7 +69,7 @@ def parse_ts(value):
         return None
 
 
-def summary_gvs(states, cursor_slot, cursor_state, api_health):
+def summary_gvs(states, api_health):
     """GV values the INFO key's OLED script reads. states: per-bound-slot display states."""
     vals = list(states)
     return {
@@ -77,8 +77,6 @@ def summary_gvs(states, cursor_slot, cursor_state, api_health):
         21: sum(s in ("waiting", "approval") for s in vals),
         22: sum(s in ("working", "starting") for s in vals),
         23: sum(s == "finished" for s in vals),
-        24: (cursor_slot + 1) if cursor_slot is not None else 0,
-        25: CODE.get(cursor_state, 0),
         26: api_health,
         27: len(vals),
     }

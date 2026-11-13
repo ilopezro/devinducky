@@ -19,8 +19,6 @@ from .render import Frame, Renderer, WHITE
 log = logging.getLogger("devinducky")
 
 GREEN, RED, DIM = (0, 255, 60), (255, 0, 0), (40, 40, 40)
-CURSOR_TIMEOUT_S = 10
-GOTO_SETTLE_S = 0.35            # switch tabs once the wheel stops turning
 API_OK, API_AUTH, API_NET = 0, 1, 2
 
 
@@ -42,9 +40,6 @@ class Daemon:
         self.sessions = {}            # session_id -> latest session dict
         self.states = {}              # session_id -> display state
         self.finished_since = {}      # session_id -> unix ts first seen finished
-        self.cursor = None            # slot index
-        self.cursor_moved = 0.0
-        self.goto_due = None          # monotonic time to switch the browser to the cursor session
         self.nav_lock = threading.Lock()   # one tab switch at a time, in order
         self.armed = {}               # key ID -> monotonic deadline
         self.api_health = API_OK
@@ -176,17 +171,11 @@ class Daemon:
         elif key == keys.KEY_OPEN:
             self.frame.set_effect(keys.led_of_key(keys.KEY_OPEN), "fade", WHITE, 0.6)
             open_url(self.cfg["new_session_url"])
-        elif key == keys.ENC1_PUSH:
-            target = self.cursor if self.cursor is not None else self.most_urgent_slot()
-            if target is not None:
-                self.open_slot(target)
         elif key == keys.KEY_DASH:
             open_url(self.cfg["dashboard_url"])
         elif key in (keys.KEY_REFRESH, keys.ENC2_PUSH):
             self.poll_now.set()
             self.frame.set_effect(keys.led_of_key(keys.KEY_REFRESH), "fade", WHITE, 0.6)
-        elif key in (keys.ENC1_CW, keys.ENC1_CCW):
-            self.move_cursor(1 if key == keys.ENC1_CW else -1)
 
     def _front_is_desktop(self):
         if not self.cfg["desktop_app"]:
@@ -283,23 +272,6 @@ class Daemon:
                 open_url(url)
                 log.info("S%d: no open tab, opened %s (%.2fs)", slot + 1, url, time.monotonic() - t)
 
-    def most_urgent_slot(self):
-        with self.lock:
-            ranked = sorted(self.bindings.ordered(),
-                            key=lambda sl: state.URGENCY.index(self.states.get(self.bindings.get(sl), "ended")))
-        return ranked[0] if ranked else None
-
-    def move_cursor(self, step):
-        bound = self.bindings.ordered()
-        if not bound:
-            return
-        if self.cursor not in bound:
-            self.cursor = bound[0] if step > 0 else bound[-1]
-        else:
-            self.cursor = bound[(bound.index(self.cursor) + step) % len(bound)]
-        self.cursor_moved = time.monotonic()
-        self.goto_due = self.cursor_moved + GOTO_SETTLE_S
-
     def confirmed(self, key):
         """True on the second tap within arm_s; the first tap arms the key and blinks it."""
         now = time.monotonic()
@@ -334,7 +306,6 @@ class Daemon:
         with self.lock:
             n = self.bindings.clear()
             self.bindings.save()
-            self.cursor = self.goto_due = None
         log.info("reset: unbound %d slot(s); previous bindings in %s.bak", n, self.bindings.path)
         self.frame.set_effect(led, "flash", GREEN, 1.0)
 
@@ -393,12 +364,7 @@ class Daemon:
             if self.api_health != API_OK:
                 f.base[info] = RED
                 f.pulses[info] = 0.8
-            if self.cursor is not None and (t - self.cursor_moved > CURSOR_TIMEOUT_S
-                                            or self.bindings.get(self.cursor) is None):
-                self.cursor = None
-            f.cursor = keys.led_of_slot(self.cursor) if self.cursor is not None else None
-            cur_sid = self.bindings.get(self.cursor) if self.cursor is not None else None
-            gvs = state.summary_gvs(bound_states, self.cursor, self.states.get(cur_sid), self.api_health)
+            gvs = state.summary_gvs(bound_states, self.api_health)
         return f.evaluate(t), gvs
 
     def render_loop(self):
@@ -432,10 +398,6 @@ class Daemon:
             except queue.Empty:
                 pass
             t = time.monotonic()
-            if self.goto_due and t >= self.goto_due:
-                self.goto_due = None
-                if self.cursor is not None:
-                    self.open_slot(self.cursor)
             for idx, deadline in list(self.armed.items()):
                 if deadline <= t:
                     del self.armed[idx]

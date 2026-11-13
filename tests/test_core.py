@@ -36,9 +36,9 @@ def test_transitions_only_notable_changes():
 
 
 def test_summary_gvs():
-    g = state.summary_gvs(["working", "waiting", "finished", "approval"], 2, "finished", 0)
-    assert g == {20: state.CODE["approval"], 21: 2, 22: 1, 23: 1, 24: 3, 25: state.CODE["finished"], 26: 0, 27: 4}
-    assert state.summary_gvs([], None, None, 1)[20] == 0
+    g = state.summary_gvs(["working", "waiting", "finished", "approval"], 0)
+    assert g == {20: state.CODE["approval"], 21: 2, 22: 1, 23: 1, 26: 0, 27: 4}
+    assert state.summary_gvs([], 1)[20] == 0
 
 
 def test_parse_ts():
@@ -184,14 +184,13 @@ def test_reset_needs_a_second_tap(tmp_path):
     d.bindings.bind(0, "aaa")
     d.bindings.bind(3, "ddd")
     d.bindings.save()
-    d.cursor, d.goto_due = 3, 1.0
     d.handle("press", keys.KEY_RESET)
     assert d.bindings.ids() == ["aaa", "ddd"]       # armed only
     d.armed[keys.KEY_RESET] = 0                     # arming timed out
     d.handle("press", keys.KEY_RESET)
     assert d.bindings.ids() == ["aaa", "ddd"]       # so this tap arms again
     d.handle("press", keys.KEY_RESET)
-    assert d.bindings.ids() == [] and d.cursor is None and d.goto_due is None
+    assert d.bindings.ids() == []
     assert Bindings(str(tmp_path / "b.json"), keys.NUM_SLOTS).load().slots == {}
     d.handle("press", keys.KEY_RESET)
     assert d.armed == {}                            # nothing bound: doesn't arm
@@ -201,28 +200,22 @@ def test_reset_keeps_the_hotkey_l4_had():
     assert str(keys.HOTKEY_FOR[keys.Event("press", keys.KEY_RESET)]) == "ctrl+alt+shift+f16"
 
 
+def test_upper_wheel_is_push_to_talk_and_nothing_else_uses_its_modifiers(tmp_path):
+    from devinducky.cli import build_profile, profile_scripts
+    scripts, _ = profile_scripts(DEFAULTS)
+    assert scripts[(keys.ENC1_PUSH, "press")] == "KEYDOWN CTRL\nKEYDOWN COMMAND\nKEYDOWN ALT"
+    assert scripts[(keys.ENC1_PUSH, "release")] == "KEYUP ALT\nKEYUP COMMAND\nKEYUP CTRL"
+    assert (keys.ENC1_CW, "press") not in scripts and (keys.ENC1_CCW, "press") not in scripts
+    held = set(DEFAULTS["wheel_hold"])
+    assert not any(held <= set(hk.mods) for hk in keys.HOTKEY_FOR.values())
+    files = set(__import__("os").listdir(build_profile(dict(DEFAULTS, wheel_hold=[]), str(tmp_path))))
+    assert "key23.txt" not in files and "key21.txt" not in files
+
+
 def test_parse_tab_list():
     out = "1\t1\thttps://a.com/x,y\n1\t2\thttps://app.devin.ai/sessions/abc\n2\t1\t\njunk\n"
     assert browser.parse_tab_list(out) == [
         (1, 1, "https://a.com/x,y"), (1, 2, "https://app.devin.ai/sessions/abc"), (2, 1, "")]
-
-
-def test_top_wheel_switches_to_session_after_settling(tmp_path, monkeypatch):
-    from devinducky import daemon
-    from devinducky.render import Frame
-    d = daemon.Daemon.__new__(daemon.Daemon)
-    d.bindings = Bindings(str(tmp_path / "b.json"), keys.NUM_SLOTS)
-    d.bindings.bind(0, "aaa")
-    d.bindings.bind(3, "ddd")
-    d.cursor, d.goto_due, d.sessions, d.frame = None, None, {}, Frame()
-    opened = []
-    monkeypatch.setattr(d, "open_slot", opened.append, raising=False)
-    d.handle("press", keys.ENC1_CW)
-    d.handle("press", keys.ENC1_CW)
-    assert d.cursor == 3 and opened == []           # nothing until the wheel stops
-    assert d.goto_due is not None
-    d.handle("press", keys.ENC1_CCW)
-    assert d.cursor == 0
 
 
 def test_mods_from_event_flags():

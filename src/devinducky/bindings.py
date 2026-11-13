@@ -58,6 +58,3 @@ class Bindings:
 
     def ids(self):
         return list(self.slots.values())
-
-    def ordered(self):
-        return sorted(self.slots)
