@@ -22,6 +22,7 @@ NUM_LEDS = 20
 REPORT_ID = 0x05
 CMD_QUERY_INFO = 0x00
 CMD_SET_LED = 0x04
+CMD_SW_RESET = 0x14
 CMD_WRITE_GV = 0x19
 
 STATUS_SUCCESS, STATUS_ERROR, STATUS_BUSY = 0, 1, 2
@@ -47,6 +48,7 @@ class PadInfo:
     serial: int
     profile: int
     sleeping: bool
+    volume: str = ""       # label of the pad's SD card when it's in USB-drive mode
 
 
 # ---------- packet builders and parsers (pure) ----------
@@ -90,6 +92,7 @@ def parse_info(resp):
         serial=struct.unpack_from("<I", bytes(resp), 7)[0],
         profile=resp[11],
         sleeping=bool(resp[12]),
+        volume=f"DP{resp[6]}_{resp[9]:02X}{resp[10]:02X}",
     )
 
 
@@ -147,6 +150,10 @@ class Pad:
         if resp[2] != STATUS_SUCCESS:
             raise PadError(f"pad returned status {resp[2]}")
         return resp
+
+    def reset(self, msc=False):
+        """Reboot the pad (into USB-drive mode if msc). It doesn't answer this one."""
+        self.dev.write(build_packet(CMD_SW_RESET, bytes([1 if msc else 0])))
 
     def info(self):
         return parse_info(self.send(build_packet(CMD_QUERY_INFO)))

@@ -433,3 +433,69 @@ def test_desktop_lookup_tries_a_short_page_first_and_returns_the_session(monkeyp
     assert calls == [("me", 30), ("me", 200)]       # found in what was already fetched: no request
     monkeypatch.setattr(desktop, "window_title", lambda: "Session")
     assert desktop.active_session_id(FakeDevin()) == ("Session", None, None)
+
+
+# ---------- compiling and installing the profile ----------
+
+def test_compiler_matches_the_configurators_bytecode():
+    from devinducky import compiler
+    # what configurator 4.0.2 wrote to the pad for these two scripts (both keys had `dr`)
+    assert compiler.compile_script("CTRL ALT F13\n") == (
+        b"\xff\x02\x00\r\x04<\xfe\x01\x01\x02A\x01\x04\x02A\x01h\x03A\x01h\x03B\x01\x04\x02B\x01\x01\x02B\x0b")
+    assert compiler.compile_script("") == bytes.fromhex("ff02000d043cfe0b")
+    assert compiler.compile_script("", dont_repeat=False) != compiler.compile_script("")
+    with pytest.raises(compiler.CompileError) as e:
+        compiler.compile_script("OLED_CLEAR\nWHILE 1\nFOO BAR(\nEND_WHILE")
+    assert e.value.line_no == 3                     # counted against the script as written
+
+
+def test_every_generated_script_compiles(tmp_path):
+    from devinducky import install
+    from devinducky.cli import build_profile
+    cfg = dict(DEFAULTS, launch=[{"name": "Fix CI", "prompt": "x"}])
+    pdir = build_profile(cfg, str(tmp_path))
+    install.compile_profile(pdir)
+    files = set(__import__("os").listdir(pdir))
+    assert all(f"key{k}.dsb" in files and f"key{k}.txt" in files for k in range(1, 27))   # empty keys too
+    assert "key3-release.dsb" in files and "key13-release.dsb" not in files
+    assert open(f"{pdir}/key21.txt").read() == ""
+    assert install.key_flags(pdir)[16] == {"dont_repeat": True, "allow_abort": False}
+
+
+def test_install_checks_the_compiler_against_the_card_and_replaces_only_our_profile(tmp_path, monkeypatch):
+    import os
+    from devinducky import install
+    from devinducky.cli import build_profile
+    monkeypatch.setattr(install, "BACKUPS", str(tmp_path / "backups"))
+    card = tmp_path / "card"
+    other = card / "profile_Other"
+    other.mkdir(parents=True)
+    (card / "profile_info.txt").write_text("1 Other\n")
+    (other / "config.txt").write_text("z1 A\ndr 1\nz2 B\n")
+    (other / "key1.txt").write_text("CTRL ALT F13\n")
+    (other / "key2.txt").write_text("STRING hi\n")
+    install.compile_profile(str(other))
+    assert install.compiler_mismatches(str(card)) == []
+    (other / "key2.dsb").write_bytes(b"\x00" + (other / "key2.dsb").read_bytes())
+    assert install.compiler_mismatches(str(card)) == ["profile_Other/key2.txt"]
+
+    pdir = build_profile(DEFAULTS, str(tmp_path / "build"))
+    install.compile_profile(pdir)
+    assert install.ensure_listed(str(card), "devinducky") == 2
+    assert install.ensure_listed(str(card), "devinducky") == 2          # listed once
+    assert (card / "profile_info.txt").read_text() == "1 Other\n2 devinducky\n"
+    assert install.copy_profile(pdir, str(card)) is None
+    mine = card / "profile_devinducky"
+    assert sorted(os.listdir(mine)) == sorted(os.listdir(pdir))
+    (mine / "stale.txt").write_text("old")
+    backup = install.copy_profile(pdir, str(card))                      # second install: old one kept aside
+    assert os.path.exists(os.path.join(backup, "stale.txt")) and not (mine / "stale.txt").exists()
+    assert sorted(os.listdir(card)) == ["profile_Other", "profile_devinducky", "profile_info.txt"]
+    assert (other / "key1.txt").read_text() == "CTRL ALT F13\n"
+
+
+def test_pad_volume_label_and_reset_packet():
+    r = bytearray(64)
+    r[6], r[9], r[10] = 24, 0xB6, 0xEC
+    assert hid.parse_info(r).volume == "DP24_B6EC"
+    assert hid.build_packet(hid.CMD_SW_RESET, bytes([1]))[2:4] == bytes([0x14, 1])

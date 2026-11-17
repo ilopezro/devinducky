@@ -8,6 +8,7 @@ import queue
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 from . import config, keys, state
@@ -335,6 +336,19 @@ def cmd_gen_profile(args):
     print("Configurator: Import → pick this zip → Save. Then close the configurator.")
 
 
+def cmd_install_profile(args):
+    from . import install
+    try:
+        if args.check:
+            with tempfile.TemporaryDirectory() as tmp:
+                install.compile_profile(build_profile(config.load(), tmp))
+            print("all scripts compile")
+        else:
+            install.install(config.load(), build_profile, force=args.force)
+    except install.InstallError as e:
+        sys.exit(f"install-profile: {e}")
+
+
 def _service():
     return f"gui/{os.getuid()}/{LABEL}"
 
@@ -444,6 +458,10 @@ def main(argv=None):
     g = sub.add_parser("gen-profile", help="write the duckyPad profile scripts")
     g.add_argument("--out", default="profile")
     g.set_defaults(fn=cmd_gen_profile)
+    i = sub.add_parser("install-profile", help="compile the profile and write it to the pad (no configurator)")
+    i.add_argument("--check", action="store_true", help="only compile; don't touch the pad")
+    i.add_argument("--force", action="store_true", help="install even if the compiler doesn't match the pad's")
+    i.set_defaults(fn=cmd_install_profile)
     sub.add_parser("up", aliases=["install", "restart"],
                    help="run in the background (launchd; restarts if running, starts at login)").set_defaults(fn=cmd_up)
     sub.add_parser("down", aliases=["uninstall"], help="stop the background daemon").set_defaults(fn=cmd_down)

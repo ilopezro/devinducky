@@ -37,7 +37,7 @@ Cloud sessions in the desktop app are the same sessions the browser shows, so LE
 
 A newly launched session opens in your browser. Hold an empty slot to bind it.
 
-The upper wheel's push is handled on the pad, not by the daemon: it holds the `wheel_hold` modifiers for as long as it's pushed in. The default, Ctrl+Cmd+Opt, is Wispr Flow's hold-to-speak shortcut. None of the pad's own hotkeys use that combination, so no other key sets it off. Change `wheel_hold` in `config.toml`, then re-run `gen-profile` and re-import.
+The upper wheel's push is handled on the pad, not by the daemon: it holds the `wheel_hold` modifiers for as long as it's pushed in. The default, Ctrl+Cmd+Opt, is Wispr Flow's hold-to-speak shortcut. None of the pad's own hotkeys use that combination, so no other key sets it off. Change `wheel_hold` in `config.toml`, then run `install-profile` again.
 
 A hold binds as soon as the key has been down for `hold_ms`, while you are still holding it. The daemon starts looking the session up the moment the key goes down (a tap looks it up too, and throws the answer away), so the session is usually loaded by then. For the desktop app it also keeps a list of your recent sessions, refreshed at most once a minute when you press a slot key, so matching the window title needs no API call. The key blinks white if it's still loading and turns solid white once it's bound. Let go then, and the pad's screen shows the slot and the session title for 4 seconds, or until you press another key. If you let go while it's still blinking, the key is bound all the same but the screen doesn't show the title. The pad can't take data from the daemon while one of its scripts is running, so the title has to arrive before the release.
 
@@ -65,7 +65,7 @@ The duckyPad can't report key presses over HID. Each key's on-press and on-relea
 
 In the other direction, the daemon drives the pad over HID. It sets each key's LED and writes global variables (`_GV20`–`_GV23`, `_GV26`, `_GV27`) that the INFO key's script reads. A bind also writes the session title into `_GV0`–`_GV14` and the key's ID into `_GV15`; the key's on-release script reads those to draw the title. `_GV28` holds one bit per bound slot, for RESET's script. It polls the Devin v3 API only for the sessions that are bound. With nothing bound it makes no polling calls.
 
-`gen-profile` builds the pad profile from the same key table the daemon uses, so the two can't drift apart.
+`install-profile` builds the pad profile from the same key table the daemon uses, so the two can't drift apart. It compiles the scripts with the configurator's own compiler, a copy of which lives in `src/devinducky/vendor/duckypad_configurator/`.
 
 ## Setup
 
@@ -73,12 +73,13 @@ In the other direction, the daemon drives the pad over HID. It sets each key's L
    - The daemon reads it from the environment. Under launchd it reads it from your login shell instead.
    - The key is never written to disk.
 2. `uv tool install --editable .` puts `devinducky` on your PATH (in `~/.local/bin`). The command runs this checkout, so code changes apply after `devinducky restart`.
-3. `devinducky gen-profile` writes `profile/duckyPad_Profile_devinducky.zip`. In the [duckyPad configurator](https://github.com/duckyPad/duckyPad-Configurator):
-   1. **Import** the zip.
-   2. **Save** to the pad.
-   3. **Close the configurator.** It holds the device while it's open.
-   - When you re-import, delete the old profile first, because Import adds a new copy.
-   - Re-run `gen-profile` after renaming launch presets.
+3. `devinducky install-profile` puts the profile on the pad. It takes about 15 seconds:
+   1. It compiles every key's script and stops at the first error, before touching the pad.
+   2. It reboots the pad into USB-drive mode and checks that its compiler reproduces the bytecode already on the card.
+   3. It replaces only `profile_devinducky`, keeping the old one in `~/.devinducky/profile_backups/`, and reboots the pad back.
+   - Run it again after renaming launch presets or changing `wheel_hold` or `arm_s`.
+   - `install-profile --check` only compiles.
+   - The [duckyPad configurator](https://github.com/duckyPad/duckyPad-Configurator) still works: `devinducky gen-profile` writes `profile/duckyPad_Profile_devinducky.zip` to Import and Save there. Delete the old profile first, because Import adds a new copy, and close the configurator afterwards, because it holds the device.
 4. Grant **Accessibility** to your terminal in System Settings › Privacy & Security. Without it, no key presses are seen.
 5. `devinducky test-pad` cycles the LEDs and prints key down/up events with timings.
 6. `devinducky which-tab` prints the active tab's session ID. The first run triggers macOS's **Automation** prompt.
