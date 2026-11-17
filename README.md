@@ -57,13 +57,13 @@ INFO shows a summary on the OLED for 5 seconds, or until you press another key. 
 
 Bindings live in `~/.devinducky/bindings.json` and survive restarts. A session that ends stays bound, showing very dim, until you rebind or unbind its key.
 
-RESET unbinds all 12 slots at once. It doesn't touch the sessions themselves. The bindings it cleared are kept in `~/.devinducky/bindings.json.bak`; copy that file back over `bindings.json` and run `devinducky restart` to undo a reset.
+RESET unbinds all 12 slots at once. The key is dim red while at least one slot is bound and dim grey when there's nothing to reset (`colors.reset_empty`); tapping it then shows `nothing to unbind` on the screen. The first tap shows `RESET?` on the pad's screen with the bound slots, each drawn where its key sits. Tap RESET again within `arm_s` seconds and the screen shows them once more as `RESET … unbound`; any other key, or waiting, cancels. The pad's script times that second tap itself and tells the daemon with a separate hotkey, because the pad takes nothing from the daemon while a script is running. For the same reason the screen can't report a failure: if the reset fails, RESET flashes red and a macOS banner says why. It doesn't touch the sessions themselves. The bindings it cleared are kept in `~/.devinducky/bindings.json.bak`; copy that file back over `bindings.json` and run `devinducky restart` to undo a reset.
 
 ## How it works
 
 The duckyPad can't report key presses over HID. Each key's on-press and on-release scripts therefore type a unique hotkey, such as `Ctrl+Alt+F13`. The daemon listens for these with `pynput` and times the gap between press and release to tell a tap from a hold.
 
-In the other direction, the daemon drives the pad over HID. It sets each key's LED and writes global variables (`_GV20`–`_GV23`, `_GV26`, `_GV27`) that the INFO key's script reads. A bind also writes the session title into `_GV0`–`_GV14` and the key's ID into `_GV15`; the key's on-release script reads those to draw the title. It polls the Devin v3 API only for the sessions that are bound. With nothing bound it makes no polling calls.
+In the other direction, the daemon drives the pad over HID. It sets each key's LED and writes global variables (`_GV20`–`_GV23`, `_GV26`, `_GV27`) that the INFO key's script reads. A bind also writes the session title into `_GV0`–`_GV14` and the key's ID into `_GV15`; the key's on-release script reads those to draw the title. `_GV28` holds one bit per bound slot, for RESET's script. It polls the Devin v3 API only for the sessions that are bound. With nothing bound it makes no polling calls.
 
 `gen-profile` builds the pad profile from the same key table the daemon uses, so the two can't drift apart.
 

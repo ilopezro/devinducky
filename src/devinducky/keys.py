@@ -29,6 +29,7 @@ MODIFIER_SETS = [
     ("ctrl", "shift"),
     ("alt", "shift"),
     ("ctrl", "alt", "shift"),
+    ("ctrl", "shift", "cmd"),
     ("ctrl", "alt", "cmd"),
 ]
 FKEYS = [f"f{n}" for n in range(13, 21)]
@@ -38,7 +39,7 @@ DUCKY_MOD = {"ctrl": "CTRL", "alt": "ALT", "shift": "SHIFT", "cmd": "COMMAND"}
 
 @dataclass(frozen=True)
 class Event:
-    kind: str          # "down" | "up" | "press"
+    kind: str          # "down" | "up" | "press" | "confirm"
     key: int           # duckyPad key ID
 
 
@@ -62,6 +63,7 @@ def _events():
     for k in LAUNCH_KEYS + [KEY_RESET, KEY_OPEN, KEY_DASH, KEY_REFRESH]:
         evs.append(Event("press", k))
     evs.append(Event("press", ENC2_PUSH))
+    evs.append(Event("confirm", KEY_RESET))      # second tap, sent from inside RESET's own script
     return evs
 
 

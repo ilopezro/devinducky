@@ -89,7 +89,8 @@ def decode(mods, fkey):
 class PadInput:
     """Runs the pynput listener and emits (kind, key) on self.events.
 
-    kind is "down", then "tap" or "ready" and "hold", for slot keys; "press" for everything else.
+    kind is "down", then "tap" or "ready" and "hold", for slot keys; "press" for everything
+    else, and "confirm" for RESET's second tap.
     """
 
     def __init__(self, hold_ms, on_raw=None):
@@ -153,7 +154,7 @@ class PadInput:
                 if kind:
                     self.events.put((kind, ev.key))
             else:
-                self.events.put(("press", ev.key))
+                self.events.put((ev.kind, ev.key))
 
     def _hold_loop(self):
         while True:

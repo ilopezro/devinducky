@@ -173,6 +173,29 @@ def test_title_gvs_pack_three_oled_lines():
     assert struct.pack("<5i", *(state.title_gvs(1, None)[i] for i in range(5))).rstrip(b"\0") == b"(untitled)"
 
 
+def test_renderer_leaves_the_pad_alone_right_after_a_hotkey(monkeypatch):
+    from devinducky import render
+    sent = []
+
+    class FakePad:
+        def set_led(self, i, c):
+            sent.append(i)
+
+        def write_gv(self, values):
+            sent.append(dict(values))
+
+    monkeypatch.setattr(render.hid, "with_retry", lambda fn, **kw: fn(FakePad()))
+    r = render.Renderer(resync_s=1e9)
+    r.last_full = 1e12
+    leds = [(1, 2, 3)] + [(0, 0, 0)] * (hid.NUM_LEDS - 1)
+    r.hold_off(60)
+    r.push(leds, {20: 1}, 0)
+    assert sent == []                               # a hotkey just arrived: nothing goes out
+    r.hold_off(0)
+    r.push(leds, {20: 1}, 0)
+    assert sent[0] == 0 and sent[-1] == {20: 1}     # and it all still goes out afterwards
+
+
 # ---------- pad profile ----------
 
 def test_build_profile(tmp_path):
@@ -197,7 +220,34 @@ def test_slot_release_script_shows_the_bound_title():
     assert "    POKE32(0xf400, _GV0)" in rel and "    POKE32(0xf438, _GV14)" in rel
     assert [l.strip() for l in rel if "PUTS" in l] == ["PUTS(0x4000f400)", "PUTS(0x4000f414)", "PUTS(0x4000f428)"]
     assert "    OLED_CPRINT S3 bound" in rel
-    assert "\n" not in scripts[(3, "press")] and "\n" not in scripts[(keys.KEY_RESET, "press")]
+    assert "\n" not in scripts[(3, "press")] and "\n" not in scripts[(keys.KEY_OPEN, "press")]
+
+
+def test_reset_script_shows_the_bound_slots_and_times_the_second_tap():
+    from devinducky.cli import profile_scripts
+    scripts, _ = profile_scripts(dict(DEFAULTS, arm_s=2))
+    rst = [l.strip() for l in scripts[(keys.KEY_RESET, "press")].splitlines()]
+    assert rst[:3] == ["CTRL ALT SHIFT F16", "IF _GV28 != 0", "BCLR"]      # arms the daemon first
+    assert "WHILE _TIME_MS - start < 2000" in rst
+    confirm = keys.HOTKEY_FOR[keys.Event("confirm", keys.KEY_RESET)]
+    assert str(confirm) == "ctrl+shift+cmd+f13"
+    at = rst.index(confirm.ducky())
+    assert rst[at - 1] == "IF k == 16" and rst.count(confirm.ducky()) == 1  # only a second tap confirms
+    raw = scripts[(keys.KEY_RESET, "press")].splitlines()
+    depth = 0                                       # the compiler mishandles LBREAK around nested loops
+    for l in raw:
+        depth += l.strip().startswith("WHILE ") - (l.strip() == "END_WHILE")
+        assert depth <= 1
+    # each slot is drawn where its key sits, on both screens
+    assert rst.count("IF _GV28 & 1") == 2 and rst.count("IF _GV28 & 2048") == 2
+    i = rst.index("IF _GV28 & 32")
+    assert rst[i + 1:i + 3] == ["OLED_CURSOR 38 58", "OLED_PRINT S6"]
+    assert rst.count("OLED_CPRINT RESET?") == 1 and rst.count("OLED_CPRINT RESET") == 1
+    other = rst[rst.index("ELSE"):]                 # nothing bound: just say so
+    assert "OLED_CPRINT nothing to unbind" in other and confirm.ducky() not in other
+    assert rst[-2:] == ["END_IF", "OLED_RESTORE"]
+    assert sum(l.startswith("WHILE ") for l in rst) == rst.count("END_WHILE") == 3
+    assert sum(l.startswith("IF ") for l in rst) == rst.count("END_IF")
 
 
 def test_bind_while_held_puts_the_title_on_the_pad(tmp_path, monkeypatch):
@@ -274,6 +324,40 @@ def test_reset_needs_a_second_tap(tmp_path):
     assert Bindings(str(tmp_path / "b.json"), keys.NUM_SLOTS).load().slots == {}
     d.handle("press", keys.KEY_RESET)
     assert d.armed == {}                            # nothing bound: doesn't arm
+
+
+def test_pad_confirmed_reset_and_bound_mask(tmp_path, monkeypatch):
+    import threading, time
+    from devinducky import daemon
+    from devinducky.render import Frame
+    from devinducky.input import PadInput
+    notes = []
+    monkeypatch.setattr(daemon, "notify", lambda *a: notes.append(a))
+    d = daemon.Daemon.__new__(daemon.Daemon)
+    d.cfg, d.lock, d.armed, d.frame = DEFAULTS, threading.RLock(), {}, Frame()
+    d.sessions, d.states, d.finished_since, d.oled, d.api_health = {}, {}, {}, None, daemon.API_OK
+    d.bindings = Bindings(str(tmp_path / "b.json"), keys.NUM_SLOTS)
+    d.bindings.bind(0, "aaa")
+    d.bindings.bind(5, "fff")
+    d.bindings.save()
+    leds, gvs = d.compose(time.monotonic())
+    assert gvs[state.GV_BOUND_MASK] == 0b100001
+    assert leds[keys.led_of_key(keys.KEY_RESET)] == tuple(DEFAULTS["colors"]["reset"])
+    p = PadInput(700)
+    p._handle(keys.Event("confirm", keys.KEY_RESET))
+    assert p.events.get_nowait() == ("confirm", keys.KEY_RESET)
+    d.handle("press", keys.KEY_RESET)               # new profile: first tap arms, the pad sends confirm
+    d.handle("confirm", keys.KEY_RESET)
+    assert d.bindings.ids() == [] and d.armed == {}
+    d.frame = Frame()                               # drop the "done" flash
+    leds, gvs = d.compose(time.monotonic())
+    assert gvs[state.GV_BOUND_MASK] == 0
+    assert leds[keys.led_of_key(keys.KEY_RESET)] == tuple(DEFAULTS["colors"]["reset_empty"])   # not red
+    d.bindings.bind(2, "ccc")
+    d.bindings.save()
+    monkeypatch.setattr(d.bindings, "save", lambda: (_ for _ in ()).throw(OSError("disk full")))
+    d.handle("confirm", keys.KEY_RESET)
+    assert d.bindings.ids() == ["ccc"] and "disk full" in notes[-1][1]   # failed: still bound, and says so
 
 
 def test_reset_keeps_the_hotkey_l4_had():

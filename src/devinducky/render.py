@@ -13,6 +13,11 @@ log = logging.getLogger(__name__)
 WHITE = (255, 255, 255)
 OFF = (0, 0, 0)
 
+# A hotkey reaches us at its F-key; the pad lets go of the modifiers over the next
+# ~80 ms. A command sent to the pad in that time can make it drop the last of those
+# reports, and macOS then sees Control (or another modifier) held down for good.
+QUIET_S = 0.2
+
 
 def scale(rgb, k):
     return tuple(int(round(c * k)) for c in rgb)
@@ -95,6 +100,11 @@ class Renderer:
         self.pad_profile = pad_profile
         self.last_full = 0.0
         self.connected = False
+        self.quiet_until = 0.0
+
+    def hold_off(self, seconds=QUIET_S):
+        """Leave the pad alone for a moment; call when one of its hotkeys arrives."""
+        self.quiet_until = time.monotonic() + seconds
 
     def invalidate(self, led):
         """The pad repaints a key itself on press/release; resend our colour for it."""
@@ -108,7 +118,7 @@ class Renderer:
             self.last_full = now
         changed = [(i, c) for i, c in enumerate(leds) if self.sent[i] != c]
         gv_changed = {k: v for k, v in gvs.items() if self.sent_gvs.get(k) != v}
-        if not changed and not gv_changed:
+        if (not changed and not gv_changed) or time.monotonic() < self.quiet_until:
             return
 
         def write(pad):
@@ -117,8 +127,12 @@ class Renderer:
                 if info.profile != self.pad_profile:
                     return False
             for i, c in changed:
+                if time.monotonic() < self.quiet_until:
+                    return False                      # a hotkey arrived mid-batch; finish next frame
                 pad.set_led(i, c)
                 self.sent[i] = c
+            if time.monotonic() < self.quiet_until:
+                return False
             if gv_changed:
                 pad.write_gv(gv_changed)
                 self.sent_gvs.update(gv_changed)

@@ -89,6 +89,7 @@ TITLE_LINES = 3
 TITLE_LINE_GVS = 5              # 20 bytes a line: 18 characters and the terminator
 GV_TITLE = 0                    # _GV0.._GV14: the title, four characters to a GV
 GV_SHOW_KEY = 15                # key ID whose release script should show the title; 0 = none
+GV_BOUND_MASK = 28              # bit n set = slot n+1 is bound; RESET's script draws from it
 
 
 def title_lines(title):

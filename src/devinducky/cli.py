@@ -115,11 +115,14 @@ def profile_scripts(cfg):
     out = {}
     names = {keys.KEY_RESET: "RESET", keys.KEY_OPEN: "NEW", keys.KEY_DASH: "DASH", keys.KEY_REFRESH: "REFR"}
     for ev, hk in keys.HOTKEY_FOR.items():
+        if ev.kind == "confirm":
+            continue
         part = "release" if ev.kind == "up" else "press"
         out[(ev.key, part)] = hk.ducky()
         if ev.kind == "up" and keys.slot_of(ev.key) is not None:
             out[(ev.key, part)] += "\n" + bound_script(ev.key)
     out[(keys.KEY_INFO, "press")] = INFO_SCRIPT
+    out[(keys.KEY_RESET, "press")] += "\n" + reset_script(cfg["arm_s"])
     mods = [keys.DUCKY_MOD[m] for m in cfg["wheel_hold"]]
     if mods:                                       # push-to-talk: held for as long as the wheel is
         out[(keys.ENC1_PUSH, "press")] = "\n".join(f"KEYDOWN {m}" for m in mods)
@@ -202,6 +205,87 @@ def bound_script(key):
               "    OLED_RESTORE",
               "END_IF"]
     return "\n".join(lines)
+
+
+def _slot_grid(indent):
+    """Draw each bound slot's name where its key sits on the pad (4 across, 3 down)."""
+    lines = []
+    for slot in range(keys.NUM_SLOTS):
+        lines += [f"IF _GV{state.GV_BOUND_MASK} & {1 << slot}",
+                  f"    OLED_CURSOR {6 + 32 * (slot % 4)} {38 + 20 * (slot // 4)}",
+                  f"    OLED_PRINT S{slot + 1}",
+                  "END_IF"]
+    return [indent + l for l in lines]
+
+
+def reset_script(arm_s):
+    """Tail of RESET's script, after the hotkey that arms the daemon.
+
+    The pad takes nothing from the daemon while a script runs, so the script waits
+    for the second tap itself: it shows which slots are bound, and if RESET is
+    pressed again within arm_s it sends the confirm hotkey and shows them once
+    more as what was reset. Any other key, or no key, cancels. With nothing bound
+    it only says so.
+
+    The loops come one after another, never one inside another: the configurator's
+    compiler makes an LBREAK that follows an inner loop jump to that inner loop's
+    end, which never terminates.
+    """
+    confirm = keys.HOTKEY_FOR[keys.Event("confirm", keys.KEY_RESET)].ducky()
+    return "\n".join([
+        f"IF _GV{state.GV_BOUND_MASK} != 0",
+        "    BCLR",                                # drop the press that started this script
+        "    OLED_CLEAR",
+        "    OLED_CURSOR 0 10",
+        "    OLED_CPRINT RESET?",
+        *_slot_grid("    "),
+        "    OLED_CURSOR 0 105",
+        "    OLED_CPRINT tap again",
+        "    OLED_UPDATE",
+        "    VAR k = 0",
+        "    VAR start = _TIME_MS",
+        f"    WHILE _TIME_MS - start < {int(arm_s * 1000)}",
+        "        k = _READKEY",
+        "        IF k != 0",
+        "            LBREAK",
+        "        END_IF",
+        "        DELAY 20",
+        "    END_WHILE",
+        f"    IF k == {keys.KEY_RESET}",
+        f"        {confirm}",
+        "        OLED_CLEAR",
+        "        OLED_CURSOR 0 10",
+        "        OLED_CPRINT RESET",
+        *_slot_grid("        "),
+        "        OLED_CURSOR 0 105",
+        "        OLED_CPRINT unbound",
+        "        OLED_UPDATE",
+        "        VAR shown = _TIME_MS",
+        "        WHILE _TIME_MS - shown < 3000",
+        "            VAR j = _READKEY",
+        "            IF j != 0",
+        "                LBREAK",
+        "            END_IF",
+        "            DELAY 20",
+        "        END_WHILE",
+        "    END_IF",
+        "    BCLR",                                # nor let a press made meanwhile run a script
+        "ELSE",
+        "    OLED_CLEAR",
+        "    OLED_CURSOR 0 55",
+        "    OLED_CPRINT nothing to unbind",
+        "    OLED_UPDATE",
+        "    VAR began = _TIME_MS",
+        "    WHILE _TIME_MS - began < 2000",
+        "        VAR n = _READKEY",
+        f"        IF n != 0 && n != {keys.KEY_RESET}",   # its own press may still be queued
+        "            LBREAK",
+        "        END_IF",
+        "        DELAY 20",
+        "    END_WHILE",
+        "END_IF",
+        "OLED_RESTORE",
+    ])
 
 
 PROFILE_NAME = "devinducky"

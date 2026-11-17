@@ -40,6 +40,7 @@ DEFAULTS = {
         "ended": [4, 4, 4],
         "launch": [40, 0, 90],
         "reset": [50, 0, 0],
+        "reset_empty": [14, 14, 14],   # RESET while nothing is bound
         "nav": [10, 10, 30],
     },
     "launch": [],

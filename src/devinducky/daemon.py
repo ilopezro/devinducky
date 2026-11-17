@@ -75,7 +75,11 @@ class Daemon:
         self.renderer = Renderer(cfg["resync_s"], cfg["pad_profile"])
         self.devin = None
         self.input = PadInput(cfg["hold_ms"],
-                              on_raw=lambda ev, _t: self.renderer.invalidate(keys.led_of_key(ev.key)))
+                              on_raw=self._on_pad_key)
+
+    def _on_pad_key(self, ev, _t):
+        self.renderer.hold_off()
+        self.renderer.invalidate(keys.led_of_key(ev.key))
 
     # ---------- Devin polling ----------
 
@@ -215,7 +219,10 @@ class Daemon:
         if launch is not None:
             self.tap_launch(launch)
         elif key == keys.KEY_RESET:
-            self.tap_reset()
+            if kind == "confirm":
+                self.reset()
+            else:
+                self.tap_reset()
         elif key == keys.KEY_OPEN:
             self.frame.set_effect(keys.led_of_key(keys.KEY_OPEN), "fade", WHITE, 0.6)
             open_url(self.cfg["new_session_url"])
@@ -391,10 +398,29 @@ class Daemon:
         if not self.confirmed(keys.KEY_RESET):
             log.info("reset armed (tap again to unbind every slot)")
             return
+        self.reset()
+
+    def reset(self):
+        """Unbind every slot. The pad's RESET script times the second tap itself and
+        sends "confirm" (it shows the slots meanwhile); a profile from before that
+        sends the same hotkey twice and goes through tap_reset."""
+        led = keys.led_of_key(keys.KEY_RESET)
+        self.armed.pop(keys.KEY_RESET, None)
         with self.lock:
-            n = self.bindings.clear()
-            self.bindings.save()
-        log.info("reset: unbound %d slot(s); previous bindings in %s.bak", n, self.bindings.path)
+            names = ", ".join(f"S{slot + 1}" for slot in sorted(self.bindings.slots))
+            try:
+                self.bindings.clear()
+                self.bindings.save()
+            except OSError as e:
+                self.bindings.load()             # the file is what counts; nothing was reset
+                log.error("reset failed: %s", e)
+                notify("devinducky", f"Reset failed: {e}")
+                self.frame.set_effect(led, "flash", RED, 1.5)
+                return
+        if not names:
+            self.frame.set_effect(led, "fade", DIM, 0.3)
+            return
+        log.info("reset: unbound %s; previous bindings in %s.bak", names, self.bindings.path)
         self.frame.set_effect(led, "flash", GREEN, 1.0)
 
     def launch(self, idx):
@@ -445,7 +471,8 @@ class Daemon:
             for i, k in enumerate(keys.LAUNCH_KEYS):
                 preset = self.cfg["launch"][i] if i < len(self.cfg["launch"]) else None
                 f.base[keys.led_of_key(k)] = tuple(preset.get("color", cfg_c["launch"])) if preset else (0, 0, 0)
-            f.base[keys.led_of_key(keys.KEY_RESET)] = tuple(cfg_c["reset"])
+            f.base[keys.led_of_key(keys.KEY_RESET)] = tuple(
+                cfg_c["reset" if self.bindings.slots else "reset_empty"])
             for k in (keys.KEY_OPEN, keys.KEY_DASH, keys.KEY_REFRESH, keys.KEY_INFO):
                 f.base[keys.led_of_key(k)] = tuple(cfg_c["nav"])
             info = keys.led_of_key(keys.KEY_INFO)
@@ -453,6 +480,7 @@ class Daemon:
                 f.base[info] = RED
                 f.pulses[info] = 0.8
             gvs = state.summary_gvs(bound_states, self.api_health)
+            gvs[state.GV_BOUND_MASK] = sum(1 << slot for slot in self.bindings.slots)
             if self.oled and self.oled[2] > t:
                 gvs.update(state.title_gvs(*self.oled[:2]))
             else:
