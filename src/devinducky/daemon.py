@@ -64,6 +64,8 @@ class Daemon:
         self.armed = {}               # key ID -> monotonic deadline
         self.held = set()             # slots held past hold_ms and not let go yet
         self.presses = {}             # slot -> Press, from key-down until tap or hold is known
+        self.recent = []              # your recent sessions, so a desktop-app bind needn't ask the API
+        self.recent_at = 0.0
         self.oled = None              # (key ID, title, monotonic deadline) for the pad's screen
         self.api_health = API_OK
         self.failures = 0
@@ -85,6 +87,7 @@ class Daemon:
                 log.info("authenticated as %s (%s) in %s", me.get("user_name") or me.get("service_user_name"),
                          me.get("principal_type"), self.devin.org_id)
                 self.api_health = API_OK
+                self.refresh_recent()
                 return
             except auth.NoApiKey as e:
                 log.error("%s", e)
@@ -182,6 +185,7 @@ class Daemon:
                 # Look the session up now, so a hold can bind the moment it's known to be one.
                 press = self.presses[slot] = Press()
                 threading.Thread(target=self.bind_from_tab, args=(slot, press), daemon=True).start()
+                threading.Thread(target=self.refresh_recent, daemon=True).start()
             elif kind == "ready":
                 # Bind while the key is still down: the title has to be on the pad
                 # before the release script runs, which is what draws it.
@@ -229,6 +233,16 @@ class Daemon:
         except BrowserError:
             return False
 
+    def refresh_recent(self, max_age_s=60):
+        if not self.cfg["desktop_app"] or self.devin is None or time.monotonic() - self.recent_at < max_age_s:
+            return
+        self.recent_at = time.monotonic()
+        try:
+            self.recent = self.devin.recent_sessions(self.devin.user_id)
+        except DevinError as e:
+            log.debug("recent sessions: %s", e)
+            self.recent_at = 0.0
+
     def _is_hold(self, press):
         return press is None or press.wait(self.cfg["hold_ms"] / 1000 + 1)
 
@@ -271,7 +285,7 @@ class Daemon:
         led = keys.led_of_slot(slot)
         err = None
         try:
-            title, sid = desktop.active_session_id(self.devin)
+            title, sid, found = desktop.active_session_id(self.devin, self.recent)
         except (BrowserError, DevinError, subprocess.TimeoutExpired) as e:
             err = e
         if not self._is_hold(press):
@@ -284,13 +298,14 @@ class Daemon:
             log.info("S%d: no session titled %r for the Devin app's front window", slot + 1, title)
             self.frame.set_effect(led, "flash", RED, 1.0)
             return
-        self.bind(slot, sid, press)
+        self.bind(slot, sid, press, found)
 
-    def bind(self, slot, sid, press=None):
+    def bind(self, slot, sid, press=None, session=None):
+        """session: the session if the caller already has it from the API."""
         led = keys.led_of_slot(slot)
         err = None
         try:
-            s = self.devin.get_session(sid)
+            s = session or self.devin.get_session(sid)
         except DevinError as e:
             err = e
         if not self._is_hold(press):
@@ -308,6 +323,7 @@ class Daemon:
             waiting = slot in self.held
             if waiting:
                 self.oled = (keys.SLOT_KEYS[slot], s.get("title"), time.monotonic() + OLED_HOLD_S)
+        self.poll_now.set()              # a session from `recent` may be a minute stale
         log.info("S%d bound to %s %r%s%s", slot + 1, s["session_id"], s.get("title"),
                  f" (moved from S{moved + 1})" if moved is not None else "",
                  "" if waiting else "; key let go before this, so no title on the pad")

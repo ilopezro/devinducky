@@ -75,14 +75,20 @@ def match_title(title, sessions):
     return max(hits, key=lambda s: (len(s[1]), s[2]))[0] if hits else None
 
 
-def active_session_id(devin=None):
+def active_session_id(devin=None, known=()):
     """The cloud session in the desktop app's front window, matched by window title.
 
     The app doesn't expose the session ID, so this looks the title up in the app's
     saved sessions, then via the API in your recent sessions, then in the org's (for
     teammates' sessions you have open). The app saves only a handful of sessions, so
     the API does most of the work. The title is sometimes a generic label, so this
-    can return None.
+    can find nothing.
+
+    `known` is sessions the caller fetched from the API earlier; a title found there
+    costs no request.
+
+    Returns (title, session_id, session): session is the API's session when the API
+    found it, which saves the caller fetching it again.
     """
     title = window_title()
     try:
@@ -90,9 +96,14 @@ def active_session_id(devin=None):
     except sqlite3.Error as e:
         log.warning("can't read %s: %s", STATE_DB, e)
         sid = None
-    for user_id in ((devin.user_id, None) if devin is not None else ()):
+    # A session missing from `known` is nearly always brand new, and a short page
+    # comes back in half the time of a full one.
+    pages = ((devin.user_id, 30), (devin.user_id, 200), (None, 200)) if devin is not None else ()
+    for found in [lambda: known] + [lambda p=p: devin.recent_sessions(*p) for p in pages]:
         if sid:
             break
-        sid = match_title(title, [(s["session_id"], s.get("title"), s.get("updated_at") or 0)
-                                  for s in devin.recent_sessions(user_id)])
-    return title, sid
+        found = found()
+        sid = match_title(title, [(s["session_id"], s.get("title"), s.get("updated_at") or 0) for s in found])
+        if sid:
+            return title, sid, next(s for s in found if s["session_id"] == sid)
+    return title, sid, None

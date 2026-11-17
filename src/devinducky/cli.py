@@ -84,7 +84,7 @@ def cmd_which_tab(args):
         try:
             devin = Devin(auth.api_key())
             devin.whoami()
-            title, sid = desktop.active_session_id(devin)
+            title, sid, _ = desktop.active_session_id(devin)
             print(f"{desktop.APP} app: {title}")
             print(f"session: {sid or '(no session with that title)'}")
         except (browser.BrowserError, DevinError) as e:

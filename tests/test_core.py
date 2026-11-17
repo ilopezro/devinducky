@@ -209,6 +209,7 @@ def test_bind_while_held_puts_the_title_on_the_pad(tmp_path, monkeypatch):
     d.cfg, d.lock, d.frame = DEFAULTS, threading.RLock(), Frame()
     d.sessions, d.states, d.finished_since, d.held, d.oled, d.presses = {}, {}, {}, set(), None, {}
     d.api_health, d.fast_until = daemon.API_OK, 0.0
+    d.poll_now = threading.Event()
     d.bindings = Bindings(str(tmp_path / "b.json"), keys.NUM_SLOTS)
     d.devin = type("D", (), {"get_session": lambda self, sid: {
         "session_id": sid, "title": "Fix CI", "status": "running", "status_detail": "working"}})()
@@ -230,6 +231,7 @@ def test_lookup_from_key_down_only_binds_if_the_press_is_a_hold(tmp_path, monkey
     d = daemon.Daemon.__new__(daemon.Daemon)
     d.cfg, d.lock, d.frame = DEFAULTS, threading.RLock(), Frame()
     d.sessions, d.states, d.finished_since, d.held, d.oled, d.fast_until = {}, {}, {}, set(), None, 0.0
+    d.poll_now = threading.Event()
     d.bindings = Bindings(str(tmp_path / "b.json"), keys.NUM_SLOTS)
     d.devin = type("D", (), {"get_session": lambda self, sid: {"session_id": sid, "title": "t", "status": "running"}})()
     tap, hold = daemon.Press(), daemon.Press()
@@ -324,3 +326,26 @@ def test_desktop_session_link_and_title_match(tmp_path):
     assert desktop.match_title("Fix bugs fawkes — logo.svg", sessions) is None
     longer = sessions + [("ddd", "Fix bug fawkes", "2025-01-01")]
     assert desktop.match_title("Fix bug fawkes — logo.svg", longer) == "ddd"
+
+
+def test_desktop_lookup_tries_a_short_page_first_and_returns_the_session(monkeypatch):
+    from devinducky import desktop
+    monkeypatch.setattr(desktop, "window_title", lambda: "Old one")
+    monkeypatch.setattr(desktop, "stored_sessions", lambda: [])
+    calls = []
+
+    class FakeDevin:
+        user_id = "me"
+
+        def recent_sessions(self, user_id=None, first=200):
+            calls.append((user_id, first))
+            new = [{"session_id": "n1", "title": "New one"}]
+            return new if first == 30 else new + [{"session_id": "o1", "title": "Old one"}]
+
+    assert desktop.active_session_id(FakeDevin()) == ("Old one", "o1", {"session_id": "o1", "title": "Old one"})
+    assert calls == [("me", 30), ("me", 200)]
+    known = [{"session_id": "o1", "title": "Old one"}]
+    assert desktop.active_session_id(FakeDevin(), known)[1:] == ("o1", known[0])
+    assert calls == [("me", 30), ("me", 200)]       # found in what was already fetched: no request
+    monkeypatch.setattr(desktop, "window_title", lambda: "Session")
+    assert desktop.active_session_id(FakeDevin()) == ("Session", None, None)
