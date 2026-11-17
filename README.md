@@ -11,7 +11,7 @@ macOS only, because it uses AppleScript to read and focus browser tabs.
 ```
  ┌──────┬──────┬──────┬──────┐
  │ S1   │ S2   │ S3   │ S4   │  session slots, all empty until you bind them
- ├──────┼──────┼──────┼──────┤    hold (~0.7 s, LED turns white, let go) = bind to the Devin session in your active tab
+ ├──────┼──────┼──────┼──────┤    hold (LED blinks, then turns white, let go) = bind to the Devin session in your active tab
  │ S5   │ S6   │ S7   │ S8   │                    (hold on a non-Devin tab = unbind)
  ├──────┼──────┼──────┼──────┤    tap           = go to that session
  │ S9   │ S10  │ S11  │ S12  │    LED           = session state
@@ -39,6 +39,8 @@ A newly launched session opens in your browser. Hold an empty slot to bind it.
 
 The upper wheel's push is handled on the pad, not by the daemon: it holds the `wheel_hold` modifiers for as long as it's pushed in. The default, Ctrl+Cmd+Opt, is Wispr Flow's hold-to-speak shortcut. None of the pad's own hotkeys use that combination, so no other key sets it off. Change `wheel_hold` in `config.toml`, then re-run `gen-profile` and re-import.
 
+A hold binds as soon as the key has been down for `hold_ms`, while you are still holding it. The daemon starts looking the session up the moment the key goes down (a tap looks it up too, and throws the answer away), so the session is usually loaded by then. The key blinks white if it's still loading and turns solid white once it's bound. Let go then, and the pad's screen shows the slot and the session title for 4 seconds, or until you press another key. If you let go while it's still blinking, the key is bound all the same but the screen doesn't show the title. The pad can't take data from the daemon while one of its scripts is running, so the title has to arrive before the release.
+
 INFO shows a summary on the OLED for 5 seconds, or until you press another key. The summary includes the API status, how many sessions are waiting on you or working, and how many keys are bound.
 
 | LED | Meaning |
@@ -61,7 +63,7 @@ RESET unbinds all 12 slots at once. It doesn't touch the sessions themselves. Th
 
 The duckyPad can't report key presses over HID. Each key's on-press and on-release scripts therefore type a unique hotkey, such as `Ctrl+Alt+F13`. The daemon listens for these with `pynput` and times the gap between press and release to tell a tap from a hold.
 
-In the other direction, the daemon drives the pad over HID. It sets each key's LED and writes global variables (`_GV20`–`_GV23`, `_GV26`, `_GV27`) that the INFO key's script reads. It polls the Devin v3 API only for the sessions that are bound. With nothing bound it makes no polling calls.
+In the other direction, the daemon drives the pad over HID. It sets each key's LED and writes global variables (`_GV20`–`_GV23`, `_GV26`, `_GV27`) that the INFO key's script reads. A bind also writes the session title into `_GV0`–`_GV14` and the key's ID into `_GV15`; the key's on-release script reads those to draw the title. It polls the Devin v3 API only for the sessions that are bound. With nothing bound it makes no polling calls.
 
 `gen-profile` builds the pad profile from the same key table the daemon uses, so the two can't drift apart.
 
@@ -105,7 +107,7 @@ wheel_hold = ["ctrl", "cmd", "alt"]   # held while the upper wheel is pushed in;
 browsers = ["Google Chrome", "Arc", "Safari"]   # search / focus order
 pad_profile = 0                     # only paint when this pad profile number is active (0 = any)
 new_session_url = "https://app.devin.ai/"   # what the NEW key opens
-notify = { waiting = true, finished = true, error = true }   # macOS banners
+notify = { waiting = true, finished = true, error = true, bound = true }   # macOS banners
 ntfy_url = ""                       # optionally also POST notifications here
 
 [colors]

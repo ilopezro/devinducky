@@ -159,6 +159,20 @@ def test_lost_release_never_becomes_a_hold():
     assert c.up(4, 16.0) is None                  # release far too late: ignore, don't rebind
 
 
+def test_title_gvs_pack_three_oled_lines():
+    title = "Add Slack submission notifications for the Allied Health rater café"
+    lines = state.title_lines(title)
+    assert lines == ["Add Slack", "submission", "notifications..."]
+    assert all(len(l) <= state.OLED_COLS for l in state.title_lines("x" * 80 + " \n tail"))
+    assert state.title_lines("caf\u00e9") == ["caf?"]
+    g = state.title_gvs(3, title)
+    assert g[state.GV_SHOW_KEY] == 3 and sorted(g) == list(range(16))
+    raw = struct.pack("<15i", *(g[i] for i in range(15)))
+    assert [raw[i:i + 20].rstrip(b"\0").decode() for i in (0, 20, 40)] == lines
+    assert all(raw[i + 19] == 0 for i in (0, 20, 40))           # every line is terminated
+    assert struct.pack("<5i", *(state.title_gvs(1, None)[i] for i in range(5))).rstrip(b"\0") == b"(untitled)"
+
+
 # ---------- pad profile ----------
 
 def test_build_profile(tmp_path):
@@ -172,6 +186,70 @@ def test_build_profile(tmp_path):
     assert "z1 S1" in conf and "dr 1" in conf and "z13 Fix C" in conf and "dr 20" in conf
     assert all(f"z{k} " in "\n".join(conf) for k in range(1, 27))
     assert open(f"{pdir}/key1.txt").read() == keys.HOTKEY_FOR[keys.Event("down", 1)].ducky() + "\n"
+
+
+def test_slot_release_script_shows_the_bound_title():
+    from devinducky.cli import profile_scripts
+    scripts, _ = profile_scripts(DEFAULTS)
+    rel = scripts[(3, "release")].splitlines()
+    assert rel[0] == keys.HOTKEY_FOR[keys.Event("up", 3)].ducky()     # the hotkey still goes first
+    assert rel[1] == "IF _GV15 == 3" and rel[-1] == "END_IF"
+    assert "    POKE32(0xf400, _GV0)" in rel and "    POKE32(0xf438, _GV14)" in rel
+    assert [l.strip() for l in rel if "PUTS" in l] == ["PUTS(0x4000f400)", "PUTS(0x4000f414)", "PUTS(0x4000f428)"]
+    assert "    OLED_CPRINT S3 bound" in rel
+    assert "\n" not in scripts[(3, "press")] and "\n" not in scripts[(keys.KEY_RESET, "press")]
+
+
+def test_bind_while_held_puts_the_title_on_the_pad(tmp_path, monkeypatch):
+    import threading, time
+    from devinducky import daemon
+    from devinducky.render import Frame
+    monkeypatch.setattr(daemon, "notify", lambda *a: None)
+    d = daemon.Daemon.__new__(daemon.Daemon)
+    d.cfg, d.lock, d.frame = DEFAULTS, threading.RLock(), Frame()
+    d.sessions, d.states, d.finished_since, d.held, d.oled, d.presses = {}, {}, {}, set(), None, {}
+    d.api_health, d.fast_until = daemon.API_OK, 0.0
+    d.bindings = Bindings(str(tmp_path / "b.json"), keys.NUM_SLOTS)
+    d.devin = type("D", (), {"get_session": lambda self, sid: {
+        "session_id": sid, "title": "Fix CI", "status": "running", "status_detail": "working"}})()
+    d.held.add(2)                                   # S3 held past hold_ms
+    d.bind(2, "abc")
+    _, gvs = d.compose(time.monotonic())
+    assert gvs[state.GV_SHOW_KEY] == 3 and gvs[0] == struct.unpack("<i", b"Fix ")[0]
+    d.handle("hold", 3)                             # let go: the pad draws it, the daemon stands down
+    assert d.compose(time.monotonic())[1][state.GV_SHOW_KEY] == 0
+    d.bind(5, "def")                                # let go before the bind finished: nothing to show
+    assert d.oled is None and d.bindings.get(5) == "def"
+
+
+def test_lookup_from_key_down_only_binds_if_the_press_is_a_hold(tmp_path, monkeypatch):
+    import threading
+    from devinducky import daemon
+    from devinducky.render import Frame
+    monkeypatch.setattr(daemon, "notify", lambda *a: None)
+    d = daemon.Daemon.__new__(daemon.Daemon)
+    d.cfg, d.lock, d.frame = DEFAULTS, threading.RLock(), Frame()
+    d.sessions, d.states, d.finished_since, d.held, d.oled, d.fast_until = {}, {}, {}, set(), None, 0.0
+    d.bindings = Bindings(str(tmp_path / "b.json"), keys.NUM_SLOTS)
+    d.devin = type("D", (), {"get_session": lambda self, sid: {"session_id": sid, "title": "t", "status": "running"}})()
+    tap, hold = daemon.Press(), daemon.Press()
+    tap.decide(False)
+    d.bind(0, "abc", tap)
+    assert d.bindings.ids() == []                   # a tap looked the session up and dropped it
+    hold.decide(True)
+    d.bind(0, "abc", hold)
+    assert d.bindings.get(0) == "abc"
+    d.cfg = dict(DEFAULTS, hold_ms=-1000)           # no wait: a press that never resolves is dropped
+    d.bind(1, "zzz", daemon.Press())
+    assert d.bindings.get(1) is None
+
+
+def test_slot_keys_report_key_down():
+    from devinducky.input import PadInput
+    p = PadInput(700)
+    p._handle(keys.Event("down", 2))
+    p._handle(keys.Event("up", 2))
+    assert [p.events.get_nowait() for _ in range(2)] == [("down", 2), ("tap", 2)]
 
 
 def test_reset_needs_a_second_tap(tmp_path):

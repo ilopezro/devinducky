@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-from . import config, keys
+from . import config, keys, state
 
 LABEL = "com.devinducky.daemon"
 PLIST = os.path.expanduser(f"~/Library/LaunchAgents/{LABEL}.plist")
@@ -117,6 +117,8 @@ def profile_scripts(cfg):
     for ev, hk in keys.HOTKEY_FOR.items():
         part = "release" if ev.kind == "up" else "press"
         out[(ev.key, part)] = hk.ducky()
+        if ev.kind == "up" and keys.slot_of(ev.key) is not None:
+            out[(ev.key, part)] += "\n" + bound_script(ev.key)
     out[(keys.KEY_INFO, "press")] = INFO_SCRIPT
     mods = [keys.DUCKY_MOD[m] for m in cfg["wheel_hold"]]
     if mods:                                       # push-to-talk: held for as long as the wheel is
@@ -170,6 +172,36 @@ WHILE _TIME_MS - start < 5000
 END_WHILE
 OLED_RESTORE
 """
+
+
+SCRATCH = 0xF400                 # the pad's scratch memory
+PUTS_OLED_CENTER = 1 << 30
+
+
+def bound_script(key):
+    """Tail of a slot key's release script: show the title the daemon just bound.
+
+    The daemon puts the key's ID in _GV15 and the title in _GV0.._GV14 (see
+    state.title_gvs) while the key is still held. PUTS prints from memory, so
+    the GVs are copied to scratch memory first.
+    """
+    n = state.TITLE_LINE_GVS
+    lines = [f"IF _GV{state.GV_SHOW_KEY} == {key}"]
+    lines += [f"    POKE32({SCRATCH + 4 * i:#x}, _GV{state.GV_TITLE + i})" for i in range(state.TITLE_LINES * n)]
+    lines += ["    OLED_CLEAR", "    OLED_CURSOR 0 10", f"    OLED_CPRINT S{keys.slot_of(key) + 1} bound"]
+    for i in range(state.TITLE_LINES):
+        lines += [f"    OLED_CURSOR 0 {45 + 20 * i}", f"    PUTS({PUTS_OLED_CENTER | SCRATCH + 4 * n * i:#x})"]
+    lines += ["    OLED_UPDATE",
+              "    VAR start = _TIME_MS",
+              "    WHILE _TIME_MS - start < 4000",
+              "        IF _READKEY != 0",
+              "            LBREAK",
+              "        END_IF",
+              "        DELAY 20",
+              "    END_WHILE",
+              "    OLED_RESTORE",
+              "END_IF"]
+    return "\n".join(lines)
 
 
 PROFILE_NAME = "devinducky"

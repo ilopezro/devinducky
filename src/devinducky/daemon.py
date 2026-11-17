@@ -20,6 +20,7 @@ log = logging.getLogger("devinducky")
 
 GREEN, RED, DIM = (0, 255, 60), (255, 0, 0), (40, 40, 40)
 API_OK, API_AUTH, API_NET = 0, 1, 2
+OLED_HOLD_S = 10      # how long a bound title waits on the pad for the key to be let go
 
 
 def notify(title, message):
@@ -29,6 +30,25 @@ def notify(title, message):
 
 def open_url(url):
     subprocess.run(["open", url], capture_output=True)
+
+
+class Press:
+    """One press of a slot key. The session lookup starts at key-down; nothing
+    is changed until the press turns out to be a hold."""
+
+    def __init__(self, is_hold=False):
+        self.decided = threading.Event()
+        self.is_hold = is_hold
+        if is_hold:
+            self.decided.set()
+
+    def decide(self, is_hold):
+        self.is_hold = is_hold
+        self.decided.set()
+
+    def wait(self, timeout):
+        """True once it's a hold; False for a tap, or if the release was lost."""
+        return self.decided.wait(timeout) and self.is_hold
 
 
 class Daemon:
@@ -42,6 +62,9 @@ class Daemon:
         self.finished_since = {}      # session_id -> unix ts first seen finished
         self.nav_lock = threading.Lock()   # one tab switch at a time, in order
         self.armed = {}               # key ID -> monotonic deadline
+        self.held = set()             # slots held past hold_ms and not let go yet
+        self.presses = {}             # slot -> Press, from key-down until tap or hold is known
+        self.oled = None              # (key ID, title, monotonic deadline) for the pad's screen
         self.api_health = API_OK
         self.failures = 0
         self.fast_until = 0.0
@@ -155,12 +178,33 @@ class Daemon:
         log.debug("event %s %s", kind, key)
         slot = keys.slot_of(key)
         if slot is not None:
-            if kind == "ready":          # held long enough; let go to bind
-                self.frame.set_effect(keys.led_of_slot(slot), "solid", WHITE, 5)
+            if kind == "down":
+                # Look the session up now, so a hold can bind the moment it's known to be one.
+                press = self.presses[slot] = Press()
+                threading.Thread(target=self.bind_from_tab, args=(slot, press), daemon=True).start()
+            elif kind == "ready":
+                # Bind while the key is still down: the title has to be on the pad
+                # before the release script runs, which is what draws it.
+                self.held.add(slot)
+                self.frame.set_effect(keys.led_of_slot(slot), "blink", WHITE, OLED_HOLD_S, period=0.2)
+                press = self.presses.pop(slot, None)
+                if press:
+                    press.decide(True)
+                else:
+                    threading.Thread(target=self.bind_from_tab, args=(slot,), daemon=True).start()
             elif kind == "hold":
-                self.frame.set_effect(keys.led_of_slot(slot), "solid", WHITE, 5)
-                threading.Thread(target=self.bind_from_tab, args=(slot,), daemon=True).start()
+                press = self.presses.pop(slot, None)
+                if press:                # let go in the instant before "ready" fired
+                    press.decide(True)
+                self.held.discard(slot)
+                with self.lock:
+                    shown, self.oled = self.oled, None
+                if shown and shown[0] == key:
+                    self.frame.set_effect(keys.led_of_slot(slot), "fade", WHITE, 0.6)
             elif kind == "tap":
+                press = self.presses.pop(slot, None)
+                if press:
+                    press.decide(False)
                 self.open_slot(slot)
             return
         launch = keys.launch_of(key)
@@ -185,15 +229,24 @@ class Daemon:
         except BrowserError:
             return False
 
-    def bind_from_tab(self, slot):
+    def _is_hold(self, press):
+        return press is None or press.wait(self.cfg["hold_ms"] / 1000 + 1)
+
+    def bind_from_tab(self, slot, press=None):
+        """Runs from key-down. Everything before an _is_hold() check only reads."""
         led = keys.led_of_slot(slot)
         if self._front_is_desktop():
-            self.bind_from_desktop(slot)
+            self.bind_from_desktop(slot, press)
             return
+        err = None
         try:
             app, url = browser.active_tab_url(self.cfg["browsers"])
         except browser.BrowserError as e:
-            log.warning("could not read browser tab: %s", e)
+            err = e
+        if not self._is_hold(press):
+            return
+        if err:
+            log.warning("could not read browser tab: %s", err)
             notify("devinducky", "Couldn't read the browser tab. Allow Automation for devinducky in "
                    "System Settings › Privacy & Security › Automation.")
             self.frame.set_effect(led, "flash", RED, 1.0)
@@ -211,30 +264,40 @@ class Daemon:
                 log.info("S%d: active %s tab is not a Devin session", slot + 1, app)
                 self.frame.set_effect(led, "flash", RED, 1.0)
             return
-        self.bind(slot, sid)
+        self.bind(slot, sid, press)
 
-    def bind_from_desktop(self, slot):
+    def bind_from_desktop(self, slot, press=None):
         """Like bind_from_tab, for the desktop app. Never unbinds: a miss may just be an unreadable title."""
         led = keys.led_of_slot(slot)
+        err = None
         try:
             title, sid = desktop.active_session_id(self.devin)
         except (BrowserError, DevinError, subprocess.TimeoutExpired) as e:
-            log.warning("could not read the Devin app's session: %s", e)
+            err = e
+        if not self._is_hold(press):
+            return
+        if err:
+            log.warning("could not read the Devin app's session: %s", err)
             self.frame.set_effect(led, "flash", RED, 1.0)
             return
         if not sid:
             log.info("S%d: no session titled %r for the Devin app's front window", slot + 1, title)
             self.frame.set_effect(led, "flash", RED, 1.0)
             return
-        self.bind(slot, sid)
+        self.bind(slot, sid, press)
 
-    def bind(self, slot, sid):
+    def bind(self, slot, sid, press=None):
         led = keys.led_of_slot(slot)
+        err = None
         try:
             s = self.devin.get_session(sid)
         except DevinError as e:
-            log.warning("bind S%d to %s failed: %s", slot + 1, sid, e)
-            notify("devinducky", f"Couldn't load that session ({e.status}).")
+            err = e
+        if not self._is_hold(press):
+            return
+        if err:
+            log.warning("bind S%d to %s failed: %s", slot + 1, sid, err)
+            notify("devinducky", f"Couldn't load that session ({err.status}).")
             self.frame.set_effect(led, "flash", RED, 1.0)
             return
         with self.lock:
@@ -242,9 +305,18 @@ class Daemon:
             self.bindings.save()
             self._update_session(s)
             self.fast_until = time.monotonic() + self.cfg["fast_poll_window_s"]
-        log.info("S%d bound to %s %r%s", slot + 1, s["session_id"], s.get("title"),
-                 f" (moved from S{moved + 1})" if moved is not None else "")
-        self.frame.set_effect(led, "fade", WHITE, 0.6)
+            waiting = slot in self.held
+            if waiting:
+                self.oled = (keys.SLOT_KEYS[slot], s.get("title"), time.monotonic() + OLED_HOLD_S)
+        log.info("S%d bound to %s %r%s%s", slot + 1, s["session_id"], s.get("title"),
+                 f" (moved from S{moved + 1})" if moved is not None else "",
+                 "" if waiting else "; key let go before this, so no title on the pad")
+        if waiting:                      # solid white: let go to read the title on the pad
+            self.frame.set_effect(led, "solid", WHITE, OLED_HOLD_S)
+        else:
+            self.frame.set_effect(led, "fade", WHITE, 0.6)
+        if self.cfg["notify"].get("bound"):
+            notify("devinducky", f"S{slot + 1} bound: {s.get('title') or s['session_id'][:8]}")
 
     def open_slot(self, slot):
         sid = self.bindings.get(slot)
@@ -365,6 +437,11 @@ class Daemon:
                 f.base[info] = RED
                 f.pulses[info] = 0.8
             gvs = state.summary_gvs(bound_states, self.api_health)
+            if self.oled and self.oled[2] > t:
+                gvs.update(state.title_gvs(*self.oled[:2]))
+            else:
+                self.oled = None
+                gvs[state.GV_SHOW_KEY] = 0
         return f.evaluate(t), gvs
 
     def render_loop(self):

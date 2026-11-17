@@ -25,7 +25,7 @@ DEFAULTS = {
     "finished_dim_s": 1800,
     "auto_bind_launched": False,
     "pad_profile": 0,          # only paint when this profile is active; 0 = any
-    "notify": {"waiting": True, "finished": True, "error": True},
+    "notify": {"waiting": True, "finished": True, "error": True, "bound": True},
     "ntfy_url": "",
     "colors": {
         "unbound": [0, 0, 0],

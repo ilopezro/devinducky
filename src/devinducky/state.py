@@ -1,6 +1,8 @@
 """Pure mapping from Devin session data to what a key shows."""
 
 import logging
+import struct
+import textwrap
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
@@ -80,6 +82,32 @@ def summary_gvs(states, api_health):
         26: api_health,
         27: len(vals),
     }
+
+
+OLED_COLS = 18                  # characters per OLED line
+TITLE_LINES = 3
+TITLE_LINE_GVS = 5              # 20 bytes a line: 18 characters and the terminator
+GV_TITLE = 0                    # _GV0.._GV14: the title, four characters to a GV
+GV_SHOW_KEY = 15                # key ID whose release script should show the title; 0 = none
+
+
+def title_lines(title):
+    """A session title as up to three OLED lines of printable ASCII."""
+    text = "".join(c if " " <= c <= "~" else "?" for c in " ".join((title or "").split()))
+    return textwrap.wrap(text, OLED_COLS, max_lines=TITLE_LINES, placeholder="...")
+
+
+def title_gvs(key, title):
+    """GVs a slot key's release script turns back into text: each line is a
+    NUL-terminated string spread little-endian over five GVs."""
+    lines = title_lines(title) or ["(untitled)"]
+    lines += [""] * (TITLE_LINES - len(lines))
+    out = {GV_SHOW_KEY: key}
+    for i, line in enumerate(lines):
+        raw = line.encode("ascii").ljust(TITLE_LINE_GVS * 4, b"\0")
+        for j, v in enumerate(struct.unpack(f"<{TITLE_LINE_GVS}i", raw)):
+            out[GV_TITLE + i * TITLE_LINE_GVS + j] = v
+    return out
 
 
 def now_ts():
